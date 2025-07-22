@@ -5,6 +5,12 @@ use winit::{
     window::Window,
 };
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    color: [f32; 4],
+}
+
 async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut size = window.inner_size();
     size.width = size.width.max(1);
@@ -43,18 +49,12 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
     });
 
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        bind_group_layouts: &[],
-        push_constant_ranges: &[],
-    });
-
     let swapchain_capabilities = surface.get_capabilities(&adapter);
     let swapchain_format = swapchain_capabilities.formats[0];
 
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: None,
-        layout: Some(&pipeline_layout),
+        layout: None,
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
@@ -74,6 +74,31 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         cache: None,
     });
 
+    let bind_group_index = 1;
+    let layout = render_pipeline.get_bind_group_layout(bind_group_index);
+    let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        size: std::mem::size_of::<Uniforms>() as u64,
+        mapped_at_creation: false,
+    });
+
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(uniform_buffer.as_entire_buffer_binding()),
+        }],
+    });
+    queue.write_buffer(
+        &uniform_buffer,
+        0,
+        bytemuck::cast_slice(&[Uniforms {
+            color: [0.1, 0.2, 0.9, 1.0],
+        }]),
+    );
+
     let mut config = surface
         .get_default_config(&adapter, size.width, size.height)
         .unwrap();
@@ -85,7 +110,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
             // Have the closure take ownership of the resources.
             // `event_loop.run` never returns, therefore we must do this to ensure
             // the resources are properly cleaned up.
-            let _ = (&instance, &adapter, &shader, &pipeline_layout);
+            let _ = (&instance, &adapter, &shader);
 
             if let Event::WindowEvent {
                 window_id: _,
@@ -130,6 +155,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                     occlusion_query_set: None,
                                 });
                             rpass.set_pipeline(&render_pipeline);
+                            rpass.set_bind_group(bind_group_index, &bind_group, &[]);
                             rpass.draw(0..3, 0..1);
                         }
 
